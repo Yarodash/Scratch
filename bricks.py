@@ -6,6 +6,7 @@ import scratch_exceptions
 import useful
 import pygame
 import constants
+import colorsys
 
 
 class ManipulatedByUser(pygame.Rect):
@@ -23,12 +24,24 @@ class ManipulatedByUser(pygame.Rect):
         raise NotImplementedError
 
 
+class ExpandingRect(pygame.Rect):
+
+    def expanded_with(self, other: pygame.Rect) -> 'ExpandingRect':
+        left = min(self.x, other.x)
+        top = min(self.y, other.y)
+        right = max(self.x + self.width, other.x + other.width)
+        bottom = max(self.y + self.height, other.y + other.height)
+
+        return ExpandingRect(left, top, right - left, bottom - top)
+
+
 class Block(ManipulatedByUser):
 
     def __init__(self, app: 'App', x: int, y: int, width: int, height: int):
         super().__init__(x, y, width, height)
 
-        self.color = [random.randint(0, 255) for _ in range(3)]
+        self.color = colorsys.hsv_to_rgb(random.random(), 0.8, 1)
+        self.color = [channel * 255 for channel in self.color]
 
         self.app: 'App' = app
         self.depth: int = self.app.get_current_top_depth()
@@ -36,13 +49,27 @@ class Block(ManipulatedByUser):
     def get_center(self) -> Tuple[int, int]:
         return self.x + self.width // 2, self.y + self.height // 2
 
-    def draw(self, surface: pygame.Surface, is_selected: bool, is_dragged: bool) -> None:
+    def get_full_content_rect(self) -> ExpandingRect:
+        return ExpandingRect(self.x, self.y, self.width, self.height)
+
+    def draw(self, surface: pygame.Surface, is_selected: bool) -> None:
         pygame.draw.rect(surface, self.color, (self.x, self.y, self.width, self.height))
+
+    def draw_for_app(self, surface: pygame.Surface, transparent_surface: pygame.Surface, is_selected: bool, is_dragged: bool) -> None:
+        if is_dragged:
+            transparent_surface.fill((111, 231, 51))
+            self.draw(transparent_surface, is_selected)
+            transparent_surface.set_alpha(127)
+            transparent_surface.set_colorkey((111, 231, 51))
+            surface.blit(transparent_surface, (0, 0))
+
+        else:
+            self.draw(surface, is_selected)
 
     def update_depth(self):
         self.depth = self.app.get_current_top_depth()
 
-    def update_location(self, x, y) -> None:
+    def update_location(self, x: int, y: int) -> None:
         self.x, self.y = x, y
 
     def update_size(self) -> None:
@@ -87,17 +114,20 @@ class BlockSpot(pygame.Rect):
         if self.inner:
             self.inner.update_depth()
 
+    def get_full_content_rect(self) -> ExpandingRect:
+        return ExpandingRect(self.x, self.y, self.width, self.height)
+
     def check_other_insert_conditions(self, block: Block) -> bool:
         return True
 
-    def can_insert(self, block: Block) -> bool:
+    def can_insert(self, block: Block, cursor_x: int, cursor_y: int) -> bool:
         if self.inner:
             return False
 
         if block.is_recursive_contain_block_spot(self):
             return False
 
-        if self.collidepoint(block.get_center()) and self.check_other_insert_conditions(block):
+        if self.collidepoint(cursor_x, cursor_y) and self.check_other_insert_conditions(block):
             return True
 
         return False
@@ -118,16 +148,18 @@ class BlockSpot(pygame.Rect):
     def update_size(self) -> None:
         if self.inner:
             self.inner.update_size()
-            self.width, self.height = self.inner.width, self.inner.height
+            inner_size = self.inner.get_full_content_rect()
+
+            self.width, self.height = inner_size.width, inner_size.height
 
         else:
             self.width = self.default_width
             self.height = self.default_height
 
-    def draw(self, surface: pygame.Surface, is_dragged: bool) -> None:
-        pygame.draw.rect(surface, (255, 255, 0), (self.x, self.y, self.width, self.height), 3)
+    def draw(self, surface: pygame.Surface) -> None:
+        pygame.draw.rect(surface, (255, 255, 255), (self.x, self.y, self.width, self.height), 3)
         if self.inner:
-            self.inner.draw(surface, False, is_dragged)
+            self.inner.draw(surface, False)
 
 
 class App:
@@ -181,7 +213,7 @@ class App:
         if event.type == pygame.MOUSEBUTTONUP and event.button == constants.LEFT_MOUSE_BUTTON:
             if self.dragged_block:
                 for block_spot in self.block_spots:
-                    if block_spot.can_insert(self.dragged_block):
+                    if block_spot.can_insert(self.dragged_block, *event.pos):
                         block_spot.insert(self.dragged_block)
                         break
 
@@ -198,9 +230,12 @@ class App:
         for event in pygame.event.get():
             self.handle_event(event)
 
-    def draw(self, screen: pygame.Surface) -> None:
+    def draw(self, drawable: pygame.Surface, drawable_transparent: pygame.Surface) -> None:
         for block in reversed(self.depth_sorted_blocks):
-            block.draw(screen, block is self.selected_block, block is self.dragged_block)
+            block.draw_for_app(drawable,
+                               drawable_transparent,
+                               block is self.selected_block,
+                               block is self.dragged_block)
 
     def update_blocks(self) -> None:
         for block in self.blocks:
@@ -209,13 +244,20 @@ class App:
 
     def run(self) -> None:
 
-        self.blocks.append(BlockWithTwoSpots(self, 200, 200))
-        self.blocks.append(BlockWithTwoSpots(self, 300, 200))
+        self.blocks.append(BlockWithOneSpot(self, 200, 200))
+        self.blocks.append(BlockWithOneSpot(self, 200, 200))
+        self.blocks.append(BlockWithOneSpot(self, 200, 200))
+        self.blocks.append(BlockWithOneSpot(self, 200, 200))
         self.blocks.append(BlockWithTwoSpots(self, 400, 200))
         self.blocks.append(BlockWithTwoSpots(self, 500, 200))
         self.blocks.append(BlockWithTwoSpots(self, 600, 200))
+        self.blocks.append(BlockWithTwoSpots(self, 400, 200))
+        self.blocks.append(BlockWithTwoSpots(self, 400, 200))
+        self.blocks.append(BlockWithTwoSpots(self, 400, 200))
 
         screen = pygame.display.set_mode((self.width, self.height))
+        drawable = pygame.Surface((self.width, self.height), pygame.SRCALPHA, 32)
+        drawable_transparent = pygame.Surface((self.width, self.height), pygame.SRCALPHA, 32)
 
         try:
             clock = pygame.time.Clock()
@@ -225,7 +267,10 @@ class App:
                 self.update_blocks()
 
                 screen.fill(constants.BACKGROUND_COLOR)
-                self.draw(screen)
+                drawable.fill(constants.BACKGROUND_COLOR)
+
+                self.draw(drawable, drawable_transparent)
+                screen.blit(drawable, (0, 0))
                 pygame.display.update()
 
                 clock.tick(self.fps)
@@ -235,6 +280,41 @@ class App:
 
         finally:
             pygame.display.quit()
+
+
+class BlockWithOneSpot(Block):
+
+    def __init__(self, app: 'App', x: int, y: int):
+        super().__init__(app, x, y, 200, 100)
+
+        self.first_block_spot: BlockSpot = BlockSpot(app, self, x, y + 100, 200, 50)
+
+    def is_recursive_contain_block_spot(self, block_spot: 'BlockSpot'):
+        return any([self.first_block_spot.is_recursive_contain_block(block_spot)])
+
+    def get_full_content_rect(self) -> ExpandingRect:
+        return ExpandingRect(self.x, self.y, self.width, self.height)\
+            .expanded_with(self.first_block_spot.get_full_content_rect())
+
+    def update_depth(self):
+        super().update_depth()
+        self.first_block_spot.update_depth()
+
+    def draw(self, surface: pygame.Surface, is_selected: bool):
+        super().draw(surface, is_selected)
+
+        if is_selected:
+            pygame.draw.rect(surface, (255, 255, 255), (self.x, self.y, self.width, self.height), 3)
+
+        self.first_block_spot.draw(surface)
+
+    def update_location(self, x, y) -> None:
+        super().update_location(x, y)
+
+        self.first_block_spot.update_location(self.x, self.y + 100)
+
+    def update_size(self) -> None:
+        self.first_block_spot.update_size()
 
 
 class BlockWithTwoSpots(Block):
@@ -254,14 +334,14 @@ class BlockWithTwoSpots(Block):
         self.first_block_spot.update_depth()
         self.second_block_spot.update_depth()
 
-    def draw(self, surface: pygame.Surface, is_selected: bool, is_dragged: bool):
-        super().draw(surface, is_selected, is_dragged)
+    def draw(self, surface: pygame.Surface, is_selected: bool):
+        super().draw(surface, is_selected)
 
         if is_selected:
             pygame.draw.rect(surface, (255, 255, 255), (self.x, self.y, self.width, self.height), 3)
 
-        self.first_block_spot.draw(surface, is_dragged)
-        self.second_block_spot.draw(surface, is_dragged)
+        self.first_block_spot.draw(surface)
+        self.second_block_spot.draw(surface)
 
     def update_location(self, x, y) -> None:
         super().update_location(x, y)
