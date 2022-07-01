@@ -26,7 +26,7 @@ class VariableScope:
         try:
             return self.variables[var_name]
         except KeyError:
-            raise scratch_exceptions.InvalidVariableName
+            raise scratch_exceptions.InvalidVariableNameException
 
 
 class ReturnsValue:
@@ -67,7 +67,7 @@ class IntegerBlock(ReturnsInteger):
 
         variable_value = variable_scope.get_variable(self.text)
         if not isinstance(variable_value, Integer):
-            raise scratch_exceptions.TypeMismatch(Integer, variable_value.__class__)
+            raise scratch_exceptions.TypeMismatchException(Integer, variable_value.__class__)
 
         return variable_value
 
@@ -107,6 +107,6 @@ class BooleanBlock(ReturnsBoolean):
 
         variable_value = variable_scope.get_variable(self.text)
         if not isinstance(variable_value, Boolean):
-            raise scratch_exceptions.TypeMismatch(Integer, variable_value.__class__)
+            raise scratch_exceptions.TypeMismatchException(Integer, variable_value.__class__)
 
         return variable_value
