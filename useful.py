@@ -1,9 +1,9 @@
 from typing import *
 
 import colorsys
-import logic
 import scratch_exceptions
 import pygame
+import re
 
 
 def represents_integer(value: str) -> bool:
@@ -12,6 +12,10 @@ def represents_integer(value: str) -> bool:
         return True
     except ValueError:
         return False
+
+
+def represents_variable_name(value: str) -> bool:
+    return bool(re.match(r'[a-z][a-z0-9]*', value))
 
 
 def color_with_alpha(color, alpha):
