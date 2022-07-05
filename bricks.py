@@ -102,7 +102,7 @@ class BlockSpot(pygame.Rect):
 
         self.app.add_new_block_spot(self)
 
-    def is_recursive_contain_block(self, block_spot: 'BlockSpot') -> bool:
+    def is_recursive_contain_block_spot(self, block_spot: 'BlockSpot') -> bool:
         if self is block_spot:
             return True
 
@@ -166,6 +166,110 @@ class BlockSpot(pygame.Rect):
 
         if self.inner:
             self.inner.draw(surface, False)
+
+
+class GridBlock(Block):
+
+    def __init__(self, app: 'App', x: int, y: int, content: List[Dict[str, Any]]):
+        super().__init__(app, x, y, 0, 0)
+
+        self.content: List[Dict[str, Any]] = content
+
+    def update_depth(self):
+        super().update_depth()
+
+        for single_inner in self.content:
+            instance = single_inner['instance']
+            instance.update_depth()
+
+    def get_full_content_rect(self) -> ExpandingRect:
+        rect = ExpandingRect(self.x, self.y, self.width, self.height)
+
+        for single_inner in self.content:
+            instance = single_inner['instance']
+            rect = rect.expanded_with(instance)
+
+        return rect
+
+    def self_draw(self, surface: pygame.Surface, is_selected: bool) -> None:
+        pygame.draw.rect(surface, self.color, (self.x, self.y, self.width, self.height))
+
+    def draw(self, surface: pygame.Surface, is_selected: bool) -> None:
+        self.self_draw(surface, is_selected)
+
+        for single_inner in self.content:
+            instance = single_inner['instance']
+
+            if isinstance(instance, Block):
+                instance.draw(surface, False)
+
+            if isinstance(instance, BlockSpot):
+                instance.draw(surface)
+
+    def calculate_content(self):
+        for single_inner in self.content:
+            single_inner['instance'].update_size()
+
+        content_converted = [(single_inner['instance'],
+                              single_inner['instance'].width,
+                              single_inner['instance'].height,
+                              single_inner.get('row', 0),
+                              single_inner.get('column', 0),
+                              single_inner.get('rowspan', 1),
+                              single_inner.get('columnspan', 1)) for single_inner in self.content]
+
+        total_rows = total_columns = 0
+
+        for _, _, _, row, column, rowspan, columnspan in content_converted:
+            total_rows = max(total_rows, row + rowspan)
+            total_columns = max(total_columns, column + columnspan)
+
+        rows_size = [0] * total_rows
+        columns_size = [0] * total_columns
+
+        for _, width, height, row, column, rowspan, columnspan in content_converted:
+            row_height = height // rowspan + 10
+            column_width = width // columnspan + 10
+
+            for i in range(row, row + rowspan):
+                rows_size[i] = max(rows_size[i], row_height)
+
+            for i in range(column, column + columnspan):
+                columns_size[i] = max(columns_size[i], column_width)
+
+        for instance, width, height, row, column, rowspan, columnspan in content_converted:
+            total_height = sum(rows_size[row: row+rowspan])
+            total_width = sum(columns_size[column: column + columnspan])
+
+            shift_top = sum(rows_size[:row])
+            shift_left = sum(columns_size[:column])
+
+            instance.update_location(self.x + shift_left + (total_width - width) // 2,
+                                     self.y + shift_top + (total_height - height) // 2)
+
+        self.width = sum(columns_size)
+        self.height = sum(rows_size)
+
+    def __getattr__(self, item):
+        for single_inner in self.content:
+            if single_inner['name'] == item:
+                return single_inner['instance']
+
+        return self.__getattribute__(item)
+
+    def update_location(self, x: int, y: int) -> None:
+        self.x, self.y = x, y
+        self.calculate_content()
+
+    def update_size(self) -> None:
+        self.calculate_content()
+
+    def is_recursive_contain_block_spot(self, block_spot: 'BlockSpot') -> bool:
+        for single_inner in self.content:
+            if single_inner['instance'].is_recursive_contain_block_spot(block_spot):
+                return True
+
+        return False
 
 
 class VariableScope:
@@ -377,42 +481,7 @@ class App:
             pygame.display.quit()
 
 
-class BlockWithOneSpot(Block):
-
-    def __init__(self, app: 'App', x: int, y: int):
-        super().__init__(app, x, y, 200, 100)
-
-        self.first_block_spot: BlockSpot = BlockSpot(app, self, x, y + 100, 200, 50)
-
-    def is_recursive_contain_block_spot(self, block_spot: 'BlockSpot'):
-        return any([self.first_block_spot.is_recursive_contain_block(block_spot)])
-
-    def get_full_content_rect(self) -> ExpandingRect:
-        return ExpandingRect(self.x, self.y, self.width, self.height) \
-            .expanded_with(self.first_block_spot.get_full_content_rect())
-
-    def update_depth(self):
-        super().update_depth()
-        self.first_block_spot.update_depth()
-
-    def draw(self, surface: pygame.Surface, is_selected: bool):
-        super().draw(surface, is_selected)
-
-        if is_selected:
-            pygame.draw.rect(surface, (255, 255, 255), (self.x, self.y, self.width, self.height), 3)
-
-        self.first_block_spot.draw(surface)
-
-    def update_location(self, x, y) -> None:
-        super().update_location(x, y)
-
-        self.first_block_spot.update_location(self.x, self.y + 100)
-
-    def update_size(self) -> None:
-        self.first_block_spot.update_size()
-
-
-class ReturnsValue(Block):
+class ReturnsValue:
 
     def calculate(self) -> Any:
         raise NotImplementedError
@@ -460,7 +529,7 @@ class OnlyIntBlockSpot(BlockSpot):
         return isinstance(block, ReturnsInt)
 
 
-class NumberBlock(ReturnsInt):
+class NumberBlock(Block, ReturnsInt):
 
     def __init__(self, app: 'App', x: int, y: int):
         super().__init__(app, x, y, 20, 20)
@@ -488,7 +557,7 @@ class NumberBlock(ReturnsInt):
         return self.app.variable_scope.get_variable(self.text)
 
 
-class VariableNameBlock(ReturnsString):
+class VariableNameBlock(Block, ReturnsString):
 
     def __init__(self, app: 'App', x: int, y: int):
         super().__init__(app, x, y, 20, 20)
@@ -517,54 +586,31 @@ class VariableNameBlock(ReturnsString):
         raise scratch_exceptions.InvalidVariableNameException(self.text)
 
 
-class BinaryIntOperation(ReturnsInt):
+class BinaryIntOperation(GridBlock, ReturnsInt):
 
     def __init__(self, app: 'App', x: int, y: int, op_text: str, op_function: Callable[[int, int], int]):
-        super().__init__(app, x, y, 80, 40)
+        super().__init__(app, x, y,
+                         [{'instance': OnlyIntBlockSpot(app, self, 0, 0, 30, 30),
+                           'name'    : 'left_spot',
+                           'row'     : 0,
+                           'column'  : 0},
+                          {'instance': OnlyIntBlockSpot(app, self, 0, 0, 30, 30),
+                           'name'    : 'right_spot',
+                           'row'     : 0,
+                           'column'  : 1}])
 
-        self.left_spot: OnlyIntBlockSpot = OnlyIntBlockSpot(app, self, 0, 0, 30, 30)
-        self.right_spot: OnlyIntBlockSpot = OnlyIntBlockSpot(app, self, 0, 0, 30, 30)
-
-        self.op_text_surface = self.app.default_in_block_font.render(op_text, True, (0, 0, 0))
         self.op_function = op_function
-
-    def is_recursive_contain_block_spot(self, block_spot: 'BlockSpot'):
-        return any([self.left_spot.is_recursive_contain_block(block_spot),
-                    self.right_spot.is_recursive_contain_block(block_spot)])
 
     def update_depth(self):
         super().update_depth()
         self.left_spot.update_depth()
         self.right_spot.update_depth()
 
-    def draw(self, surface: pygame.Surface, is_selected: bool):
-        super().draw(surface, is_selected)
+    def self_draw(self, surface: pygame.Surface, is_selected: bool) -> None:
+        super().self_draw(surface, is_selected)
 
         if is_selected:
             pygame.draw.rect(surface, (255, 255, 255), (self.x, self.y, self.width, self.height), 3)
-
-        self.left_spot.draw(surface)
-        self.right_spot.draw(surface)
-
-        op_location = self.op_text_surface.get_rect(
-            center=pygame.Rect(self.left_spot.right, self.y, self.right_spot.left - self.left_spot.right,
-                               self.height).center)
-        surface.blit(self.op_text_surface, op_location)
-
-    def update_location(self, x, y) -> None:
-        super().update_location(x, y)
-
-        self.left_spot.update_location(self.x + 5,
-                                       self.y + 5 + (self.height - self.left_spot.height - 10) // 2)
-        self.right_spot.update_location(self.x + 15 + self.left_spot.width + self.op_text_surface.get_width(),
-                                        self.y + 5 + (self.height - self.right_spot.height - 10) // 2)
-
-    def update_size(self) -> None:
-        self.left_spot.update_size()
-        self.right_spot.update_size()
-
-        self.width = self.left_spot.width + self.op_text_surface.get_width() + self.right_spot.width + 20
-        self.height = max(self.left_spot.height, self.right_spot.height) + 10
 
     def calculate(self) -> int:
         if self.left_spot.inner and self.right_spot.inner:
@@ -597,7 +643,7 @@ class IntDivIntBlock(BinaryIntOperation):
         super().__init__(app, x, y, '÷', lambda a, b: a // b)
 
 
-class IntCompareOperation(ReturnsBool):
+class IntCompareOperation(Block, ReturnsBool):
 
     def __init__(self, app: 'App', x: int, y: int, op_text: str, op_function: Callable[[int, int], bool]):
         super().__init__(app, x, y, 80, 40)
@@ -609,8 +655,8 @@ class IntCompareOperation(ReturnsBool):
         self.op_function = op_function
 
     def is_recursive_contain_block_spot(self, block_spot: 'BlockSpot'):
-        return any([self.left_spot.is_recursive_contain_block(block_spot),
-                    self.right_spot.is_recursive_contain_block(block_spot)])
+        return any([self.left_spot.is_recursive_contain_block_spot(block_spot),
+                    self.right_spot.is_recursive_contain_block_spot(block_spot)])
 
     def update_depth(self):
         super().update_depth()
@@ -716,7 +762,7 @@ class EventBrick(Brick):
         self.text_surface = self.app.default_in_block_font.render(displayed_event_name, True, (0, 0, 0))
 
     def is_recursive_contain_block_spot(self, block_spot: 'BlockSpot'):
-        return self.next_spot.is_recursive_contain_block(block_spot)
+        return self.next_spot.is_recursive_contain_block_spot(block_spot)
 
     def get_full_content_rect(self) -> ExpandingRect:
         return ExpandingRect(self.x, self.y, self.width, self.height) \
@@ -776,7 +822,7 @@ class PrintBrick(Brick):
         return ExpandingRect(self.x, self.y, self.width, self.height).expanded_with(self.next_spot)
 
     def is_recursive_contain_block_spot(self, block_spot: 'BlockSpot'):
-        return self.spot.is_recursive_contain_block(block_spot) or self.next_spot.is_recursive_contain_block(block_spot)
+        return self.spot.is_recursive_contain_block_spot(block_spot) or self.next_spot.is_recursive_contain_block_spot(block_spot)
 
     def update_depth(self):
         super().update_depth()
@@ -844,10 +890,10 @@ class ConditionBrick(Brick):
         return ExpandingRect(self.x, self.y, self.width, self.height).expanded_with(self.next_spot)
 
     def is_recursive_contain_block_spot(self, block_spot: 'BlockSpot'):
-        return any([self.condition_spot.is_recursive_contain_block(block_spot),
-                    self.true_spot.is_recursive_contain_block(block_spot),
-                    self.false_spot.is_recursive_contain_block(block_spot),
-                    self.next_spot.is_recursive_contain_block(block_spot)])
+        return any([self.condition_spot.is_recursive_contain_block_spot(block_spot),
+                    self.true_spot.is_recursive_contain_block_spot(block_spot),
+                    self.false_spot.is_recursive_contain_block_spot(block_spot),
+                    self.next_spot.is_recursive_contain_block_spot(block_spot)])
 
     def update_depth(self):
         super().update_depth()
@@ -915,9 +961,9 @@ class WhileBrick(Brick):
         return ExpandingRect(self.x, self.y, self.width, self.height).expanded_with(self.next_spot)
 
     def is_recursive_contain_block_spot(self, block_spot: 'BlockSpot'):
-        return any([self.condition_spot.is_recursive_contain_block(block_spot),
-                    self.true_spot.is_recursive_contain_block(block_spot),
-                    self.next_spot.is_recursive_contain_block(block_spot)])
+        return any([self.condition_spot.is_recursive_contain_block_spot(block_spot),
+                    self.true_spot.is_recursive_contain_block_spot(block_spot),
+                    self.next_spot.is_recursive_contain_block_spot(block_spot)])
 
     def update_depth(self):
         super().update_depth()
@@ -977,9 +1023,9 @@ class AssignIntBrick(Brick):
         return ExpandingRect(self.x, self.y, self.width, self.height).expanded_with(self.next_spot)
 
     def is_recursive_contain_block_spot(self, block_spot: 'BlockSpot'):
-        return self.variable_spot.is_recursive_contain_block(block_spot) \
-               or self.int_spot.is_recursive_contain_block(block_spot) \
-               or self.next_spot.is_recursive_contain_block(block_spot)
+        return self.variable_spot.is_recursive_contain_block_spot(block_spot) \
+               or self.int_spot.is_recursive_contain_block_spot(block_spot) \
+               or self.next_spot.is_recursive_contain_block_spot(block_spot)
 
     def update_depth(self):
         super().update_depth()
