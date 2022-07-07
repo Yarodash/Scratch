@@ -26,6 +26,9 @@ def apply_key(text: str, key: int) -> str:
     if key == pygame.K_BACKSPACE:
         return text[:-1]
 
+    if key == pygame.K_MINUS:
+        return text + '-'
+
     if key in range(pygame.K_a, pygame.K_z + 1):
         return text + chr(key)
 

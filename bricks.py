@@ -5,7 +5,6 @@ import scratch_exceptions
 import useful
 import pygame
 import constants
-import colorsys
 import collections
 
 
@@ -35,7 +34,7 @@ class ExpandingRect(pygame.Rect):
         return ExpandingRect(left, top, right - left, bottom - top)
 
 
-class Block(ManipulatedByUser):
+class Block(ExpandingRect, ManipulatedByUser):
 
     def __init__(self, app: 'App', x: int, y: int, width: int, height: int):
         super().__init__(x, y, width, height)
@@ -161,11 +160,33 @@ class BlockSpot(pygame.Rect):
             self.height = self.default_height
 
     def draw(self, surface: pygame.Surface) -> None:
-        # pygame.draw.rect(surface, (255, 255, 255), (self.x, self.y, self.width, self.height), 3)
+        #pygame.draw.rect(surface, (255, 255, 255), (self.x, self.y, self.width, self.height), 1)
         # pygame.draw.rect(surface, (255, 255, 255), (self.x - 1, self.y - 1, self.width + 2, self.height + 2), 3)
 
         if self.inner:
             self.inner.draw(surface, False)
+
+
+class TextBlock(Block):
+
+    def __init__(self, app: 'App', x: int, y: int, text: str, text_color: Tuple[float, float, float] = (0, 0, 0)):
+        super().__init__(app, x, y, 0, 0)
+
+        self.text_color = text_color
+        self.text_surface = self.app.default_in_block_font.render(text, True, self.text_color)
+
+    def set_text(self, text):
+        self.text_surface = self.app.default_in_block_font.render(text, True, self.text_color)
+
+    def update_size(self) -> None:
+        self.width = self.text_surface.get_width()
+        self.height = self.text_surface.get_height()
+
+    def draw(self, surface: pygame.Surface, is_selected: bool) -> None:
+        # pygame.draw.rect(surface, self.color, (self.x, self.y, self.width, self.height))
+        surface.blit(self.text_surface,
+                     (self.x + (self.width - self.text_surface.get_width()) // 2,
+                      self.y + (self.height - self.text_surface.get_height()) // 2))
 
 
 class GridBlock(Block):
@@ -192,7 +213,10 @@ class GridBlock(Block):
         return rect
 
     def self_draw(self, surface: pygame.Surface, is_selected: bool) -> None:
-        pygame.draw.rect(surface, self.color, (self.x, self.y, self.width, self.height))
+        super().draw(surface, is_selected)
+
+        if is_selected:
+            pygame.draw.rect(surface, (255, 255, 255), (self.x, self.y, self.width, self.height), 3)
 
     def draw(self, surface: pygame.Surface, is_selected: bool) -> None:
         self.self_draw(surface, is_selected)
@@ -211,8 +235,7 @@ class GridBlock(Block):
             single_inner['instance'].update_size()
 
         content_converted = [(single_inner['instance'],
-                              single_inner['instance'].width,
-                              single_inner['instance'].height,
+                              *single_inner['instance'].get_full_content_rect().size,
                               single_inner.get('row', 0),
                               single_inner.get('column', 0),
                               single_inner.get('rowspan', 1),
@@ -238,7 +261,7 @@ class GridBlock(Block):
                 columns_size[i] = max(columns_size[i], column_width)
 
         for instance, width, height, row, column, rowspan, columnspan in content_converted:
-            total_height = sum(rows_size[row: row+rowspan])
+            total_height = sum(rows_size[row: row + rowspan])
             total_width = sum(columns_size[column: column + columnspan])
 
             shift_top = sum(rows_size[:row])
@@ -252,7 +275,7 @@ class GridBlock(Block):
 
     def __getattr__(self, item):
         for single_inner in self.content:
-            if single_inner['name'] == item:
+            if single_inner.get('name', None) == item:
                 return single_inner['instance']
 
         return self.__getattribute__(item)
@@ -296,7 +319,7 @@ class App:
         self.height: int = height
         self.fps: int = fps
 
-        self.default_in_block_font: pygame.font.Font = pygame.font.SysFont('Consolas', 24)
+        self.default_in_block_font: pygame.font.Font = pygame.font.SysFont('Consolas', 16)
 
         self.variable_scope: VariableScope = VariableScope()
 
@@ -363,8 +386,11 @@ class App:
                     self.triggered_events.append(constants.TriggeredEvent.SPACE_PRESSED_EVENT)
 
     def handle_events(self) -> None:
-        for event in pygame.event.get():
+        for event in (events := pygame.event.get()):
             self.handle_event(event)
+
+        if events:
+            self.update_blocks()
 
     def draw(self, drawable: pygame.Surface, drawable_transparent: pygame.Surface) -> None:
         for block in reversed(self.depth_sorted_blocks):
@@ -391,7 +417,8 @@ class App:
                 executable_next = executable.execute()
                 self.executing_bricks = executable_next + self.executing_bricks[1:]
 
-            except scratch_exceptions.ScratchRuntimeException:
+            except scratch_exceptions.ScratchRuntimeException as e:
+                print('Error', str(e))
                 self.executing_bricks = []
 
     def execute_triggered_events(self) -> None:
@@ -405,42 +432,42 @@ class App:
     def clear_triggered_events_list(self) -> None:
         self.triggered_events = []
 
+    def spawn_n_times(self, constructor, n, x, y, dx=5, dy=15):
+        for i in range(n):
+            self.blocks.append(constructor(self, x + dx * i, y + dy * i))
+
     def run(self) -> None:
 
-        self.blocks.append(PressSPACEEventBrick(self, 500, 500))
-        self.blocks.append(PressSPACEEventBrick(self, 500, 500))
-        self.blocks.append(PressSPACEEventBrick(self, 500, 500))
-        self.blocks.append(ConditionBrick(self, 600, 0))
-        self.blocks.append(ConditionBrick(self, 600, 0))
-        self.blocks.append(ConditionBrick(self, 600, 0))
-        self.blocks.append(WhileBrick(self, 700, 0))
-        self.blocks.append(WhileBrick(self, 700, 0))
-        self.blocks.append(WhileBrick(self, 700, 0))
-        self.blocks.append(PrintBrick(self, 0, 0))
-        self.blocks.append(PrintBrick(self, 0, 0))
-        self.blocks.append(PrintBrick(self, 0, 0))
-        self.blocks.append(AssignIntBrick(self, 0, 400))
-        self.blocks.append(AssignIntBrick(self, 0, 400))
-        self.blocks.append(AssignIntBrick(self, 0, 400))
-        self.blocks.append(IntPlusIntBlock(self, 0, 0))
-        self.blocks.append(IntPlusIntBlock(self, 0, 50))
-        self.blocks.append(IntPlusIntBlock(self, 0, 100))
-        self.blocks.append(IntSubIntBlock(self, 100, 0))
-        self.blocks.append(IntSubIntBlock(self, 100, 50))
-        self.blocks.append(IntSubIntBlock(self, 100, 100))
-        self.blocks.append(IntMultiplyIntBlock(self, 200, 0))
-        self.blocks.append(IntMultiplyIntBlock(self, 200, 50))
-        self.blocks.append(IntMultiplyIntBlock(self, 200, 100))
-        self.blocks.append(IntDivIntBlock(self, 300, 0))
-        self.blocks.append(IntDivIntBlock(self, 300, 50))
-        self.blocks.append(IntDivIntBlock(self, 300, 100))
-        self.blocks.append(IntGreaterEqualIntBlock(self, 300, 100))
-        self.blocks.append(IntLessIntBlock(self, 300, 100))
-        self.blocks.append(IntGreaterIntBlock(self, 300, 100))
+        # for i in range(7):
+        #     self.blocks.append(PressSPACEEventBrick(self, 0, i * 30))
+        #     self.blocks.append(ConditionBrick(self, 100, i * 30))
+        #     self.blocks.append(WhileBrick(self, 200, i * 30))
+        #     self.blocks.append(PrintBrick(self, 300, i * 30))
+        #     self.blocks.append(AssignIntBrick(self, 400, i * 30))
+        #     self.blocks.append(IntPlusIntBlock(self, 500, i * 30))
+        #     self.blocks.append(IntSubIntBlock(self, 600, i * 30))
+        #     self.blocks.append(IntMultiplyIntBlock(self, 700, i * 30))
+        #     self.blocks.append(IntDivIntBlock(self, 800, i * 30))
+        #     self.blocks.append(IntModIntBlock(self, 900, i * 30))
+        #     self.blocks.append(IntGreaterEqualIntBlock(self, 1000, i * 30))
+        #     self.blocks.append(IntLessIntBlock(self, 1100, i * 30))
+        #     self.blocks.append(IntGreaterIntBlock(self, 1200, i * 30))
 
-        for i in range(48):
-            self.blocks.append(NumberBlock(self, i * 20, 200))
-            self.blocks.append(VariableNameBlock(self, i * 20, 300))
+        # for i in range(48):
+        #    self.blocks.append(NumberBlock(self, i * 20, 200))
+        #    self.blocks.append(VariableNameBlock(self, i * 20, 250))
+
+        self.spawn_n_times(PressSPACEEventBrick, 1, 0, 0)
+        self.spawn_n_times(NumberBlock, 19, 0, 90, 4, 7)
+        self.spawn_n_times(VariableNameBlock, 7, 50, 90)
+        self.spawn_n_times(IntModIntBlock, 1, 100, 90)
+        self.spawn_n_times(IntLessIntBlock, 2, 150, 150)
+        self.spawn_n_times(AssignIntBrick, 7, 200, 210)
+        self.spawn_n_times(IntPlusIntBlock, 2, 100, 250)
+        self.spawn_n_times(PrintBrick, 1, 0, 370)
+        self.spawn_n_times(WhileBrick, 2, 0, 450)
+        self.spawn_n_times(ConditionWithoutElseBrick, 2, 130, 450)
+        self.spawn_n_times(IntEqualIntBlock, 2, 130, 350)
 
         screen = pygame.display.set_mode((self.width, self.height))
         drawable = pygame.Surface((self.width, self.height), pygame.SRCALPHA, 32)
@@ -451,19 +478,19 @@ class App:
 
             while True:
                 self.handle_events()
-                self.update_blocks()
+                #self.update_blocks()
 
                 self.execute_triggered_events()
                 self.clear_triggered_events_list()
 
                 self.execute_bricks()
 
-                print('Variable scope: ', end='')
-                for k, v in self.variable_scope.variables.items():
-                    print(f'{k} = {v}; ', end='')
-                print()
+                # ('Variable scope: ', end='')
+                # for k, v in self.variable_scope.variables.items():
+                #    print(f'{k} = {v}; ', end='')
+                # print()
 
-                self.update_blocks()
+                #self.update_blocks()
 
                 screen.fill(constants.BACKGROUND_COLOR)
                 drawable.fill(constants.BACKGROUND_COLOR)
@@ -540,12 +567,12 @@ class NumberBlock(Block, ReturnsInt):
         super().draw(surface, is_selected)
 
         text_surface = self.app.default_in_block_font.render(self.text, True, (0, 0, 0))
-        surface.blit(text_surface, (self.x + 10, self.y + 10))
+        surface.blit(text_surface, (self.x + 5, self.y + 5))
 
     def update_size(self) -> None:
         text_surface = self.app.default_in_block_font.render(self.text, True, (0, 0, 0))
-        self.width = 20 + text_surface.get_width()
-        self.height = 20 + text_surface.get_height()
+        self.width = 10 + text_surface.get_width()
+        self.height = 10 + text_surface.get_height()
 
     def keyboard_press(self, key: int) -> None:
         self.text = useful.apply_key(self.text, key)
@@ -566,15 +593,15 @@ class VariableNameBlock(Block, ReturnsString):
 
     def draw(self, surface: pygame.Surface, is_selected: bool) -> None:
         super().draw(surface, is_selected)
-        pygame.draw.rect(surface, (90, 0, 90), (self.x, self.y, self.width, self.height), 3)
+        pygame.draw.rect(surface, (90, 200, 90), (self.x, self.y, self.width, self.height), 1)
 
         text_surface = self.app.default_in_block_font.render(self.text, True, (0, 0, 0))
-        surface.blit(text_surface, (self.x + 10, self.y + 10))
+        surface.blit(text_surface, (self.x + 5, self.y + 5))
 
     def update_size(self) -> None:
         text_surface = self.app.default_in_block_font.render(self.text, True, (0, 0, 0))
-        self.width = 20 + text_surface.get_width()
-        self.height = 20 + text_surface.get_height()
+        self.width = 10 + text_surface.get_width()
+        self.height = 10 + text_surface.get_height()
 
     def keyboard_press(self, key: int) -> None:
         self.text = useful.apply_key(self.text, key)
@@ -594,23 +621,16 @@ class BinaryIntOperation(GridBlock, ReturnsInt):
                            'name'    : 'left_spot',
                            'row'     : 0,
                            'column'  : 0},
+                          {'instance': TextBlock(app, 0, 0, op_text),
+                           'name'    : 'text_block',
+                           'row'     : 0,
+                           'column'  : 1},
                           {'instance': OnlyIntBlockSpot(app, self, 0, 0, 30, 30),
                            'name'    : 'right_spot',
                            'row'     : 0,
-                           'column'  : 1}])
+                           'column'  : 2}])
 
         self.op_function = op_function
-
-    def update_depth(self):
-        super().update_depth()
-        self.left_spot.update_depth()
-        self.right_spot.update_depth()
-
-    def self_draw(self, surface: pygame.Surface, is_selected: bool) -> None:
-        super().self_draw(surface, is_selected)
-
-        if is_selected:
-            pygame.draw.rect(surface, (255, 255, 255), (self.x, self.y, self.width, self.height), 3)
 
     def calculate(self) -> int:
         if self.left_spot.inner and self.right_spot.inner:
@@ -643,54 +663,30 @@ class IntDivIntBlock(BinaryIntOperation):
         super().__init__(app, x, y, '÷', lambda a, b: a // b)
 
 
-class IntCompareOperation(Block, ReturnsBool):
+class IntModIntBlock(BinaryIntOperation):
+
+    def __init__(self, app: 'App', x: int, y: int):
+        super().__init__(app, x, y, '%', lambda a, b: a % b)
+
+
+class IntCompareOperation(GridBlock, ReturnsBool):
 
     def __init__(self, app: 'App', x: int, y: int, op_text: str, op_function: Callable[[int, int], bool]):
-        super().__init__(app, x, y, 80, 40)
+        super().__init__(app, x, y,
+                         [{'instance': OnlyIntBlockSpot(app, self, 0, 0, 30, 30),
+                           'name'    : 'left_spot',
+                           'row'     : 0,
+                           'column'  : 0},
+                          {'instance': TextBlock(app, 0, 0, op_text),
+                           'name'    : 'text_block',
+                           'row'     : 0,
+                           'column'  : 1},
+                          {'instance': OnlyIntBlockSpot(app, self, 0, 0, 30, 30),
+                           'name'    : 'right_spot',
+                           'row'     : 0,
+                           'column'  : 2}])
 
-        self.left_spot: OnlyIntBlockSpot = OnlyIntBlockSpot(app, self, 0, 0, 30, 30)
-        self.right_spot: OnlyIntBlockSpot = OnlyIntBlockSpot(app, self, 0, 0, 30, 30)
-
-        self.op_text_surface = self.app.default_in_block_font.render(op_text, True, (0, 0, 0))
         self.op_function = op_function
-
-    def is_recursive_contain_block_spot(self, block_spot: 'BlockSpot'):
-        return any([self.left_spot.is_recursive_contain_block_spot(block_spot),
-                    self.right_spot.is_recursive_contain_block_spot(block_spot)])
-
-    def update_depth(self):
-        super().update_depth()
-        self.left_spot.update_depth()
-        self.right_spot.update_depth()
-
-    def draw(self, surface: pygame.Surface, is_selected: bool):
-        super().draw(surface, is_selected)
-
-        if is_selected:
-            pygame.draw.rect(surface, (255, 255, 255), (self.x, self.y, self.width, self.height), 3)
-
-        self.left_spot.draw(surface)
-        self.right_spot.draw(surface)
-
-        op_location = self.op_text_surface.get_rect(
-            center=pygame.Rect(self.left_spot.right, self.y, self.right_spot.left - self.left_spot.right,
-                               self.height).center)
-        surface.blit(self.op_text_surface, op_location)
-
-    def update_location(self, x, y) -> None:
-        super().update_location(x, y)
-
-        self.left_spot.update_location(self.x + 5,
-                                       self.y + 5 + (self.height - self.left_spot.height - 10) // 2)
-        self.right_spot.update_location(self.x + 15 + self.left_spot.width + self.op_text_surface.get_width(),
-                                        self.y + 5 + (self.height - self.right_spot.height - 10) // 2)
-
-    def update_size(self) -> None:
-        self.left_spot.update_size()
-        self.right_spot.update_size()
-
-        self.width = self.left_spot.width + self.op_text_surface.get_width() + self.right_spot.width + 20
-        self.height = max(self.left_spot.height, self.right_spot.height) + 10
 
     def calculate(self) -> bool:
         if self.left_spot.inner and self.right_spot.inner:
@@ -758,7 +754,8 @@ class EventBrick(Brick):
 
         app.register_event_handler(event_name, self)
 
-        self.next_spot = OnlyBrickSpot(app, self, 0, 0, self.width, constants.EMPTY_BRICK_SLOT_HEIGHT)
+        self.next_spot = OnlyBrickSpot(app, self, 0, 0,
+                                       constants.EMPTY_BRICK_SLOT_WIDTH, constants.EMPTY_BRICK_SLOT_HEIGHT)
         self.text_surface = self.app.default_in_block_font.render(displayed_event_name, True, (0, 0, 0))
 
     def is_recursive_contain_block_spot(self, block_spot: 'BlockSpot'):
@@ -807,67 +804,66 @@ class PressSPACEEventBrick(EventBrick):
         super().__init__(app, x, y, 200, 50, constants.TriggeredEvent.SPACE_PRESSED_EVENT, 'Press SPACE to execute')
 
 
-class PrintBrick(Brick):
+class GridBrick(GridBlock, Brick):
 
-    def __init__(self, app: 'App', x: int, y: int):
-        super().__init__(app, x, y, 80, 40)
+    def __init__(self, app: 'App', x: int, y: int, content: List[Dict[str, Any]], have_next: bool = True):
+        super().__init__(app, x, y, content)
 
-        self.spot: OnlyIntBlockSpot = OnlyIntBlockSpot(app, self, 0, 0, 30, 30)
-        self.next_spot = OnlyBrickSpot(app, self, 0, 0, self.width, constants.EMPTY_BRICK_SLOT_HEIGHT)
-
-        self.text_surface = self.app.default_in_block_font.render('Print', True, (0, 0, 0))
-        self.result_surface = pygame.Surface((0, 0))
-
-    def get_full_content_rect(self) -> ExpandingRect:
-        return ExpandingRect(self.x, self.y, self.width, self.height).expanded_with(self.next_spot)
-
-    def is_recursive_contain_block_spot(self, block_spot: 'BlockSpot'):
-        return self.spot.is_recursive_contain_block_spot(block_spot) or self.next_spot.is_recursive_contain_block_spot(block_spot)
+        self.next_spot: Optional[OnlyBrickSpot] = None
+        if have_next:
+            self.next_spot = OnlyBrickSpot(app, self, x, y,
+                                           constants.EMPTY_BRICK_SLOT_WIDTH, constants.EMPTY_BRICK_SLOT_HEIGHT)
 
     def update_depth(self):
         super().update_depth()
-        self.spot.update_depth()
-        self.next_spot.update_depth()
+        if self.next_spot:
+            self.next_spot.update_depth()
 
-    def draw(self, surface: pygame.Surface, is_selected: bool):
+    def get_full_content_rect(self) -> ExpandingRect:
+        rect = super().get_full_content_rect()
+
+        if self.next_spot:
+            rect = rect.expanded_with(self.next_spot)
+
+        return rect
+
+    def draw(self, surface: pygame.Surface, is_selected: bool) -> None:
         super().draw(surface, is_selected)
+        if self.next_spot:
+            self.next_spot.draw(surface)
 
-        if is_selected:
-            pygame.draw.rect(surface, (255, 255, 255), (self.x, self.y, self.width, self.height), 3)
+    def calculate_content(self):
+        super().calculate_content()
+        if self.next_spot:
+            self.next_spot.update_location(self.x, self.bottom)
+            self.next_spot.update_size()
 
-        self.spot.draw(surface)
-        self.next_spot.draw(surface)
+    def is_recursive_contain_block_spot(self, block_spot: 'BlockSpot') -> bool:
+        return super().is_recursive_contain_block_spot(block_spot) \
+               or self.next_spot.is_recursive_contain_block_spot(block_spot)
 
-        location = self.text_surface.get_rect(center=pygame.Rect(self.left, self.y,
-                                                                 self.text_surface.get_width() + 10, self.height)
-                                              .center)
-        surface.blit(self.text_surface, location)
+    def execute(self) -> List['Brick']:
+        raise NotImplementedError
 
-        surface.blit(self.result_surface, (self.spot.right + 5,
-                                           self.y + (self.height - self.result_surface.get_height()) // 2))
 
-    def update_location(self, x, y) -> None:
-        super().update_location(x, y)
+class PrintBrick(GridBrick):
 
-        self.spot.update_location(self.x + self.text_surface.get_width() + 10, self.y + 5)
-        self.next_spot.update_location(self.x, self.bottom)
-
-    def update_size(self) -> None:
-        self.spot.update_size()
-        self.next_spot.update_size()
-
-        self.width = self.text_surface.get_width() + self.spot.width + self.result_surface.get_width() + 20
-        self.height = self.spot.height + 10
+    def __init__(self, app: 'App', x: int, y: int):
+        super().__init__(app, x, y,
+                         [{'instance': TextBlock(app, 0, 0, 'Print'),
+                           'row'     : 0,
+                           'column'  : 0},
+                          {'instance': OnlyIntBlockSpot(app, self, 0, 0, 40, 20),
+                           'name'    : 'spot',
+                           'row'     : 0,
+                           'column'  : 1}])
 
     def execute(self) -> List['Brick']:
         if self.spot.inner:
             result = self.spot.inner.calculate()
-            text = ' = {}'.format(result)
             print('PRINT: {}'.format(result))
-            self.result_surface = self.app.default_in_block_font.render(text, True, (0, 0, 0))
 
         else:
-            self.result_surface = pygame.Surface((0, 0))
             raise scratch_exceptions.EmptyArgumentException
 
         if self.next_spot.inner:
@@ -876,52 +872,31 @@ class PrintBrick(Brick):
         return []
 
 
-class ConditionBrick(Brick):
+class ConditionBrick(GridBrick):
 
     def __init__(self, app: 'App', x: int, y: int):
-        super().__init__(app, x, y, 100, 100)
-
-        self.condition_spot: OnlyBoolBlockSpot = OnlyBoolBlockSpot(app, self, 25, 10, 50, 20)
-        self.true_spot: OnlyBrickSpot = OnlyBrickSpot(app, self, 30, 40, 70, 20)
-        self.false_spot: OnlyBrickSpot = OnlyBrickSpot(app, self, 30, 70, 70, 20)
-        self.next_spot: OnlyBrickSpot = OnlyBrickSpot(app, self, 0, 100, self.width, constants.EMPTY_BRICK_SLOT_HEIGHT)
-
-    def get_full_content_rect(self) -> ExpandingRect:
-        return ExpandingRect(self.x, self.y, self.width, self.height).expanded_with(self.next_spot)
-
-    def is_recursive_contain_block_spot(self, block_spot: 'BlockSpot'):
-        return any([self.condition_spot.is_recursive_contain_block_spot(block_spot),
-                    self.true_spot.is_recursive_contain_block_spot(block_spot),
-                    self.false_spot.is_recursive_contain_block_spot(block_spot),
-                    self.next_spot.is_recursive_contain_block_spot(block_spot)])
-
-    def update_depth(self):
-        super().update_depth()
-        [spot.update_depth() for spot in [self.condition_spot, self.true_spot, self.false_spot, self.next_spot]]
-
-    def draw(self, surface: pygame.Surface, is_selected: bool):
-        super().draw(surface, is_selected)
-
-        if is_selected:
-            pygame.draw.rect(surface, (255, 255, 255), (self.x, self.y, self.width, self.height), 3)
-
-        [spot.draw(surface) for spot in [self.condition_spot, self.true_spot, self.false_spot, self.next_spot]]
-
-    def update_location(self, x, y) -> None:
-        super().update_location(x, y)
-
-        self.condition_spot.update_location(self.x + (self.width - self.condition_spot.width) // 2, self.y + 10)
-        self.true_spot.update_location(self.x + 30, self.condition_spot.bottom + 10)
-        self.false_spot.update_location(self.x + 30, self.true_spot.bottom + 10)
-        self.next_spot.update_location(self.x, self.bottom)
-
-    def update_size(self) -> None:
-        [spot.update_size() for spot in [self.condition_spot, self.true_spot, self.false_spot, self.next_spot]]
-
-        self.width = max(50 + self.condition_spot.width,
-                         self.true_spot.width + 30,
-                         self.false_spot.width + 30)
-        self.height = self.condition_spot.height + self.true_spot.height + self.false_spot.height + 40
+        super().__init__(app, x, y,
+                         [{'instance': TextBlock(app, 0, 0, 'if'),
+                           'row'     : 0,
+                           'column'  : 0},
+                          {'instance': OnlyBoolBlockSpot(app, self, 0, 0, 40, 20),
+                           'name'    : 'condition_spot',
+                           'row'     : 0,
+                           'column'  : 1},
+                          {'instance': TextBlock(app, 0, 0, 'then'),
+                           'row'     : 1,
+                           'column'  : 0},
+                          {'instance': OnlyBrickSpot(app, self, 0, 0, 40, 20),
+                           'name'    : 'true_spot',
+                           'row'     : 1,
+                           'column'  : 1},
+                          {'instance': TextBlock(app, 0, 0, 'else'),
+                           'row'     : 2,
+                           'column'  : 0},
+                          {'instance': OnlyBrickSpot(app, self, 0, 0, 40, 20),
+                           'name'    : 'false_spot',
+                           'row'     : 2,
+                           'column'  : 1}])
 
     def execute(self) -> List['Brick']:
         if not self.condition_spot.inner:
@@ -948,48 +923,60 @@ class ConditionBrick(Brick):
         return next_bricks
 
 
-class WhileBrick(Brick):
+class ConditionWithoutElseBrick(GridBrick):
 
     def __init__(self, app: 'App', x: int, y: int):
-        super().__init__(app, x, y, 100, 100)
+        super().__init__(app, x, y,
+                         [{'instance': TextBlock(app, 0, 0, 'if'),
+                           'row'     : 0,
+                           'column'  : 0},
+                          {'instance': OnlyBoolBlockSpot(app, self, 0, 0, 40, 20),
+                           'name'    : 'condition_spot',
+                           'row'     : 0,
+                           'column'  : 1},
+                          {'instance': TextBlock(app, 0, 0, 'then'),
+                           'row'     : 1,
+                           'column'  : 0},
+                          {'instance': OnlyBrickSpot(app, self, 0, 0, 40, 20),
+                           'name'    : 'true_spot',
+                           'row'     : 1,
+                           'column'  : 1}])
 
-        self.condition_spot: OnlyBoolBlockSpot = OnlyBoolBlockSpot(app, self, 25, 10, 50, 20)
-        self.true_spot: OnlyBrickSpot = OnlyBrickSpot(app, self, 20, 40, 60, 50)
-        self.next_spot: OnlyBrickSpot = OnlyBrickSpot(app, self, 0, 100, self.width, constants.EMPTY_BRICK_SLOT_HEIGHT)
+    def execute(self) -> List['Brick']:
+        if not self.condition_spot.inner:
+            raise scratch_exceptions.EmptyArgumentException
 
-    def get_full_content_rect(self) -> ExpandingRect:
-        return ExpandingRect(self.x, self.y, self.width, self.height).expanded_with(self.next_spot)
+        condition_result: bool = self.condition_spot.inner.calculate()
+        next_bricks = []
 
-    def is_recursive_contain_block_spot(self, block_spot: 'BlockSpot'):
-        return any([self.condition_spot.is_recursive_contain_block_spot(block_spot),
-                    self.true_spot.is_recursive_contain_block_spot(block_spot),
-                    self.next_spot.is_recursive_contain_block_spot(block_spot)])
+        if condition_result:
+            if self.true_spot.inner:
+                next_bricks.append(self.true_spot.inner)
+            else:
+                raise scratch_exceptions.EmptyArgumentException
 
-    def update_depth(self):
-        super().update_depth()
-        [spot.update_depth() for spot in [self.condition_spot, self.true_spot, self.next_spot]]
+        if self.next_spot.inner:
+            next_bricks.append(self.next_spot.inner)
 
-    def draw(self, surface: pygame.Surface, is_selected: bool):
-        super().draw(surface, is_selected)
+        return next_bricks
 
-        if is_selected:
-            pygame.draw.rect(surface, (255, 255, 255), (self.x, self.y, self.width, self.height), 3)
 
-        [spot.draw(surface) for spot in [self.condition_spot, self.true_spot, self.next_spot]]
+class WhileBrick(GridBrick):
 
-    def update_location(self, x, y) -> None:
-        super().update_location(x, y)
-
-        self.condition_spot.update_location(self.x + (self.width - self.condition_spot.width) // 2, self.y + 10)
-        self.true_spot.update_location(self.x + 20, self.condition_spot.bottom + 10)
-        self.next_spot.update_location(self.x, self.bottom)
-
-    def update_size(self) -> None:
-        [spot.update_size() for spot in [self.condition_spot, self.true_spot, self.next_spot]]
-
-        self.width = max(50 + self.condition_spot.width,
-                         self.true_spot.width + 40)
-        self.height = self.condition_spot.height + self.true_spot.height + 30
+    def __init__(self, app: 'App', x: int, y: int):
+        super().__init__(app, x, y,
+                         [{'instance': TextBlock(app, 0, 0, 'while'),
+                           'row'     : 0,
+                           'column'  : 0},
+                          {'instance': OnlyBoolBlockSpot(app, self, 0, 0, 40, 20),
+                           'name'    : 'condition_spot',
+                           'row'     : 0,
+                           'column'  : 1},
+                          {'instance'  : OnlyBrickSpot(app, self, 0, 0, 40, 20),
+                           'name'      : 'true_spot',
+                           'row'       : 1,
+                           'column'    : 0,
+                           'columnspan': 2}])
 
     def execute(self) -> List['Brick']:
         if not self.condition_spot.inner:
@@ -1003,66 +990,22 @@ class WhileBrick(Brick):
             else:
                 raise scratch_exceptions.EmptyArgumentException
 
-        else:
-            if self.next_spot.inner:
-                return [self.next_spot.inner]
+        if self.next_spot.inner:
+            return [self.next_spot.inner]
+
+        return []
 
 
-class AssignIntBrick(Brick):
+class AssignIntBrick(GridBrick):
 
     def __init__(self, app: 'App', x: int, y: int):
-        super().__init__(app, x, y, 80, 40)
-
-        self.variable_spot: OnlyVariableNameBlockSpot = OnlyVariableNameBlockSpot(app, self, 10, 10, 30, 30)
-        self.int_spot: OnlyIntBlockSpot = OnlyIntBlockSpot(app, self, 50, 10, 30, 30)
-        self.next_spot: OnlyBrickSpot = OnlyBrickSpot(app, self, 0, 0, self.width, constants.EMPTY_BRICK_SLOT_HEIGHT)
-
-        self.text_surface = self.app.default_in_block_font.render('=', True, (0, 0, 0))
-
-    def get_full_content_rect(self) -> ExpandingRect:
-        return ExpandingRect(self.x, self.y, self.width, self.height).expanded_with(self.next_spot)
-
-    def is_recursive_contain_block_spot(self, block_spot: 'BlockSpot'):
-        return self.variable_spot.is_recursive_contain_block_spot(block_spot) \
-               or self.int_spot.is_recursive_contain_block_spot(block_spot) \
-               or self.next_spot.is_recursive_contain_block_spot(block_spot)
-
-    def update_depth(self):
-        super().update_depth()
-        self.variable_spot.update_depth()
-        self.int_spot.update_depth()
-        self.next_spot.update_depth()
-
-    def draw(self, surface: pygame.Surface, is_selected: bool):
-        super().draw(surface, is_selected)
-
-        if is_selected:
-            pygame.draw.rect(surface, (255, 255, 255), (self.x, self.y, self.width, self.height), 3)
-
-        self.variable_spot.draw(surface)
-        self.int_spot.draw(surface)
-        self.next_spot.draw(surface)
-
-        surface.blit(self.text_surface, (self.variable_spot.right + 10,
-                                         self.y + (self.height - self.text_surface.get_height()) // 2))
-
-    def update_location(self, x, y) -> None:
-        super().update_location(x, y)
-
-        self.variable_spot.update_location(self.x + 10, self.y + (self.height - self.variable_spot.height) // 2)
-        self.int_spot.update_location(self.x + self.variable_spot.width + self.text_surface.get_width() + 30,
-                                      self.y + (self.height - self.int_spot.height) // 2)
-        self.next_spot.update_location(self.x, self.bottom)
-
-    def update_size(self) -> None:
-        self.variable_spot.update_size()
-        self.int_spot.update_size()
-        self.next_spot.update_size()
-
-        self.width = self.variable_spot.width + self.int_spot.width + self.text_surface.get_width() + 40
-        self.height = max(self.variable_spot.height,
-                          self.int_spot.height,
-                          self.text_surface.get_height()) + 20
+        super().__init__(app, x, y,
+                         [{'instance': OnlyVariableNameBlockSpot(app, self, 0, 0, 40, 20),
+                           'name': 'variable_spot', 'row': 0, 'column': 0},
+                          {'instance': TextBlock(app, 0, 0, ':='),
+                           'row': 0, 'column': 1},
+                          {'instance': OnlyIntBlockSpot(app, self, 0, 0, 40, 20),
+                           'name': 'int_spot', 'row': 0, 'column': 2}])
 
     def execute(self) -> List['Brick']:
         if self.variable_spot.inner:
@@ -1075,7 +1018,6 @@ class AssignIntBrick(Brick):
         else:
             raise scratch_exceptions.EmptyArgumentException
 
-        print('SETTING VARIABLE', var_name, value)
         self.app.variable_scope.set_variable(var_name, value)
 
         if self.next_spot.inner:
