@@ -34,25 +34,30 @@ class ExpandingRect(pygame.Rect):
         return ExpandingRect(left, top, right - left, bottom - top)
 
 
-class Block(ExpandingRect, ManipulatedByUser):
+class UpdatableRect(ExpandingRect):
 
-    def __init__(self, app: 'App', x: int, y: int, width: int, height: int):
+    def __init__(self, x: int, y: int, width: int, height: int):
         super().__init__(x, y, width, height)
+        self.full_content_rect: ExpandingRect = ExpandingRect(x, y, width, height)
 
-        self.color = useful.color_generator.new_color()
+    def calculate_full_content_rect(self) -> None:
+        raise NotImplementedError
 
-        self.app: 'App' = app
-        self.owner: Optional['BlockSpot'] = None
-        self.depth: int = self.app.get_current_top_depth()
+    def update_depth(self) -> None:
+        raise NotImplementedError
 
-    def get_center(self) -> Tuple[int, int]:
-        return self.x + self.width // 2, self.y + self.height // 2
+    def update_location(self, x, y) -> None:
+        self.x, self.y = x, y
 
-    def get_full_content_rect(self) -> ExpandingRect:
-        return ExpandingRect(self.x, self.y, self.width, self.height)
+    def update_size(self) -> None:
+        raise NotImplementedError
+
+    def update_all(self) -> None:
+        self.update_size()
+        self.calculate_full_content_rect()
 
     def draw(self, surface: pygame.Surface, is_selected: bool) -> None:
-        pygame.draw.rect(surface, self.color, (self.x, self.y, self.width, self.height))
+        raise NotImplementedError
 
     def draw_for_app(self, surface: pygame.Surface, transparent_surface: pygame.Surface, is_selected: bool,
                      is_dragged: bool) -> None:
@@ -66,11 +71,25 @@ class Block(ExpandingRect, ManipulatedByUser):
         else:
             self.draw(surface, is_selected)
 
+
+class Block(UpdatableRect, ManipulatedByUser):
+
+    def __init__(self, app: 'App', x: int, y: int, width: int, height: int):
+        super().__init__(x, y, width, height)
+        self.color = useful.color_generator.new_color()
+
+        self.app: 'App' = app
+        self.owner: Optional['BlockSpot'] = None
+        self.depth: int = self.app.get_current_top_depth()
+
+    def calculate_full_content_rect(self) -> None:
+        self.full_content_rect = ExpandingRect(self.x, self.y, self.width, self.height)
+
+    def draw(self, surface: pygame.Surface, is_selected: bool) -> None:
+        pygame.draw.rect(surface, self.color, (self.x, self.y, self.width, self.height))
+
     def update_depth(self):
         self.depth = self.app.get_current_top_depth()
-
-    def update_location(self, x: int, y: int) -> None:
-        self.x, self.y = x, y
 
     def update_size(self) -> None:
         pass
@@ -82,12 +101,10 @@ class Block(ExpandingRect, ManipulatedByUser):
         pass
 
     def relative_move(self, dx: int, dy: int) -> None:
-        self.x += dx
-        self.y += dy
-        self.update_location(self.x, self.y)
+        self.update_location(self.x + dx, self.y + dy)
 
 
-class BlockSpot(pygame.Rect):
+class BlockSpot(UpdatableRect):
 
     def __init__(self, app: 'App', owner: Block, x: int, y: int, width: int, height: int):
         super().__init__(x, y, width, height)
@@ -114,8 +131,8 @@ class BlockSpot(pygame.Rect):
         if self.inner:
             self.inner.update_depth()
 
-    def get_full_content_rect(self) -> ExpandingRect:
-        return ExpandingRect(self.x, self.y, self.width, self.height)
+    def calculate_full_content_rect(self) -> None:
+        self.full_content_rect = ExpandingRect(self.x, self.y, self.width, self.height)
 
     def check_other_insert_conditions(self, block: Block) -> bool:
         return True
@@ -150,8 +167,8 @@ class BlockSpot(pygame.Rect):
 
     def update_size(self) -> None:
         if self.inner:
-            self.inner.update_size()
-            inner_size = self.inner.get_full_content_rect()
+            self.inner.update_all()
+            inner_size = self.inner.full_content_rect
 
             self.width, self.height = inner_size.width, inner_size.height
 
@@ -159,7 +176,7 @@ class BlockSpot(pygame.Rect):
             self.width = self.default_width
             self.height = self.default_height
 
-    def draw(self, surface: pygame.Surface) -> None:
+    def draw(self, surface: pygame.Surface, is_selected: bool) -> None:
         #pygame.draw.rect(surface, (255, 255, 255), (self.x, self.y, self.width, self.height), 1)
         # pygame.draw.rect(surface, (255, 255, 255), (self.x - 1, self.y - 1, self.width + 2, self.height + 2), 3)
 
@@ -203,14 +220,8 @@ class GridBlock(Block):
             instance = single_inner['instance']
             instance.update_depth()
 
-    def get_full_content_rect(self) -> ExpandingRect:
-        rect = ExpandingRect(self.x, self.y, self.width, self.height)
-
-        for single_inner in self.content:
-            instance = single_inner['instance']
-            rect = rect.expanded_with(instance)
-
-        return rect
+    def calculate_full_content_rect(self) -> None:
+        self.full_content_rect = ExpandingRect(self.x, self.y, self.width, self.height)
 
     def self_draw(self, surface: pygame.Surface, is_selected: bool) -> None:
         super().draw(surface, is_selected)
@@ -222,20 +233,14 @@ class GridBlock(Block):
         self.self_draw(surface, is_selected)
 
         for single_inner in self.content:
-            instance = single_inner['instance']
-
-            if isinstance(instance, Block):
-                instance.draw(surface, False)
-
-            if isinstance(instance, BlockSpot):
-                instance.draw(surface)
+            single_inner['instance'].draw(surface, False)
 
     def calculate_content(self):
         for single_inner in self.content:
-            single_inner['instance'].update_size()
+            single_inner['instance'].update_all()
 
         content_converted = [(single_inner['instance'],
-                              *single_inner['instance'].get_full_content_rect().size,
+                              *single_inner['instance'].full_content_rect.size,
                               single_inner.get('row', 0),
                               single_inner.get('column', 0),
                               single_inner.get('rowspan', 1),
@@ -279,10 +284,6 @@ class GridBlock(Block):
                 return single_inner['instance']
 
         return self.__getattribute__(item)
-
-    def update_location(self, x: int, y: int) -> None:
-        self.x, self.y = x, y
-        self.calculate_content()
 
     def update_size(self) -> None:
         self.calculate_content()
@@ -386,11 +387,13 @@ class App:
                     self.triggered_events.append(constants.TriggeredEvent.SPACE_PRESSED_EVENT)
 
     def handle_events(self) -> None:
-        for event in (events := pygame.event.get()):
+        for event in pygame.event.get():
             self.handle_event(event)
 
-        if events:
-            self.update_blocks()
+    def update_blocks(self) -> None:
+        for block in self.blocks:
+            if not block.owner:
+                block.update_all()
 
     def draw(self, drawable: pygame.Surface, drawable_transparent: pygame.Surface) -> None:
         for block in reversed(self.depth_sorted_blocks):
@@ -401,11 +404,6 @@ class App:
                                drawable_transparent,
                                block is self.selected_block,
                                block is self.dragged_block)
-
-    def update_blocks(self) -> None:
-        for block in self.blocks:
-            block.update_location(block.x, block.y)
-            block.update_size()
 
     def register_event_handler(self, event_name: constants.TriggeredEvent, event_handler_brick: 'EventBrick') -> None:
         self.event_handlers[event_name].append(event_handler_brick)
@@ -429,7 +427,6 @@ class App:
             for event_brick in self.event_handlers[event_name]:
                 self.executing_bricks.append(event_brick)
 
-    def clear_triggered_events_list(self) -> None:
         self.triggered_events = []
 
     def spawn_n_times(self, constructor, n, x, y, dx=5, dy=15):
@@ -457,6 +454,7 @@ class App:
         #    self.blocks.append(NumberBlock(self, i * 20, 200))
         #    self.blocks.append(VariableNameBlock(self, i * 20, 250))
 
+        self.spawn_n_times(IntPlusIntBlock, 3, 100, 250)
         self.spawn_n_times(PressSPACEEventBrick, 1, 0, 0)
         self.spawn_n_times(NumberBlock, 19, 0, 90, 4, 7)
         self.spawn_n_times(VariableNameBlock, 7, 50, 90)
@@ -478,19 +476,10 @@ class App:
 
             while True:
                 self.handle_events()
-                #self.update_blocks()
+                self.update_blocks()
 
                 self.execute_triggered_events()
-                self.clear_triggered_events_list()
-
                 self.execute_bricks()
-
-                # ('Variable scope: ', end='')
-                # for k, v in self.variable_scope.variables.items():
-                #    print(f'{k} = {v}; ', end='')
-                # print()
-
-                #self.update_blocks()
 
                 screen.fill(constants.BACKGROUND_COLOR)
                 drawable.fill(constants.BACKGROUND_COLOR)
@@ -500,6 +489,7 @@ class App:
                 pygame.display.update()
 
                 clock.tick(self.fps)
+                pygame.display.set_caption('FPS: %d' % clock.get_fps())
 
         except self.QuitException:
             pass
@@ -761,9 +751,9 @@ class EventBrick(Brick):
     def is_recursive_contain_block_spot(self, block_spot: 'BlockSpot'):
         return self.next_spot.is_recursive_contain_block_spot(block_spot)
 
-    def get_full_content_rect(self) -> ExpandingRect:
-        return ExpandingRect(self.x, self.y, self.width, self.height) \
-            .expanded_with(self.next_spot.get_full_content_rect())
+    def calculate_full_content_rect(self) -> None:
+        self.full_content_rect = ExpandingRect(self.x, self.y, self.width, self.height)\
+            .expanded_with(self.next_spot.full_content_rect)
 
     def update_depth(self):
         super().update_depth()
@@ -775,21 +765,18 @@ class EventBrick(Brick):
         if is_selected:
             pygame.draw.rect(surface, (255, 255, 255), (self.x, self.y, self.width, self.height), 3)
 
-        self.next_spot.draw(surface)
+        self.next_spot.draw(surface, False)
 
         location = self.text_surface.get_rect(center=self.center)
         surface.blit(self.text_surface, location)
-
-    def update_location(self, x, y) -> None:
-        super().update_location(x, y)
-
-        self.next_spot.update_location(self.x, self.bottom)
 
     def update_size(self) -> None:
         self.next_spot.update_size()
 
         self.width = self.text_surface.get_width() + 20
         self.height = self.text_surface.get_height() + 10
+
+        self.next_spot.update_location(self.x, self.bottom)
 
     def execute(self) -> List['Brick']:
         if self.next_spot.inner:
@@ -819,24 +806,22 @@ class GridBrick(GridBlock, Brick):
         if self.next_spot:
             self.next_spot.update_depth()
 
-    def get_full_content_rect(self) -> ExpandingRect:
-        rect = super().get_full_content_rect()
+    def calculate_full_content_rect(self) -> None:
+        super().calculate_full_content_rect()
 
         if self.next_spot:
-            rect = rect.expanded_with(self.next_spot)
-
-        return rect
+            self.full_content_rect = self.full_content_rect.expanded_with(self.next_spot)
 
     def draw(self, surface: pygame.Surface, is_selected: bool) -> None:
         super().draw(surface, is_selected)
         if self.next_spot:
-            self.next_spot.draw(surface)
+            self.next_spot.draw(surface, False)
 
     def calculate_content(self):
         super().calculate_content()
         if self.next_spot:
             self.next_spot.update_location(self.x, self.bottom)
-            self.next_spot.update_size()
+            self.next_spot.update_all()
 
     def is_recursive_contain_block_spot(self, block_spot: 'BlockSpot') -> bool:
         return super().is_recursive_contain_block_spot(block_spot) \
